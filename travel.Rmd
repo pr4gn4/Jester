@@ -1,0 +1,421 @@
+---
+title: "R Notebook"
+output:
+  word_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r message=FALSE, warning=FALSE}
+library(recommenderlabJester)
+library(ggplot2)
+library(data.table)
+library(ISLR) 
+library(ggplot2)
+library(tidyverse)
+library(fpc)
+library(knitr)
+```
+
+```{r}
+joke<- read.csv("jester.csv")
+```
+
+```{r}
+dim(joke)
+```
+####We can make use of the content of the first column to get a sense of the density of the joke rating:
+```{r}
+summary(joke$X62)
+```
+
+####As we can see, each user has on average rated approximately 34 out of the 150 total jokes, with the minimums and maximums conforming to the (8 - 140) range indicated on the data set's website. Given that the mean number of items rated is 34.1, the overall density of the dataset is 34.1%.
+
+####The first column of the data frame is now removed since it does not contain user ratings. Furthermore, each '99' value within the data frame is set to a value of 'NA' to properly reflect the fact that all '99' values represent a lack of data.
+```{r}
+joke1 <- joke[,2:ncol(joke)]
+```
+
+####Set all 99's to NA
+```{r}
+joke1[,][joke1[,] == 99] <- NA
+```
+
+####Checking the minimum and maximum ratings when 'NA' values are excluded indicates that the ratings do, in fact, fall within the specified [-10, 10] range:
+```{r}
+min(joke1[][], na.rm = TRUE)
+```
+```{r}
+max(joke1[][], na.rm = TRUE)
+```
+
+```{r}
+summary(as.vector(as.matrix(joke1)))
+```
+
+####Plotting the average rating per user shows that those values do appear to be approximately normally distributed, though not exactly zero-centered. It shows that the dataset may benefit from normalization during model building.
+```{r}
+average_ratings_per_user <- rowMeans(joke1, na.rm = TRUE)
+
+hist(average_ratings_per_user, main = "Distribution of the average rating per user",
+     col = "yellow")
+```
+
+####Prior to using any of the pre-built recommenderlab functions for collaborative filtering we must first convert the data frame to a realRatingMatrix. This is done by first converting the data frame to an R matrix, then converting that matrix to a realRatingMatrix using the as() function.
+```{r}
+# convert the jester data frame to a matrix
+mat <- as.matrix(joke1)
+
+# convert matrix to a recommenderlab realRatingMatrix
+rmat <- as(mat,"realRatingMatrix")
+```
+
+```{r}
+identical(as(rmat,"matrix"),mat)
+```
+```{r}
+rmat_norm<-normalize(rmat,method="Z-score")
+```
+
+```{r}
+image(rmat, main = "Raw Ratings")
+```
+```{r}
+image(rmat_norm, main = "Normalized Ratings")
+```
+
+```{r}
+# split the data into the training and the test set:
+e <- evaluationScheme(rmat, method="split", train=0.8, given=8, goodRating=0)
+```
+```{r}
+e
+```
+```{r}
+getData(e,"train")
+```
+```{r}
+getData(e,"known")
+```
+```{r}
+getData(e,"unknown")
+```
+
+###Cosine Distnace
+```{r}
+#train UBCF cosine similarity models
+
+# non-normalized
+UB_N_C <- Recommender(getData(e, "train"), "UBCF", 
+      param=list(normalize = NULL, method="Cosine"))
+# centered
+UB_C_C <- Recommender(getData(e, "train"), "UBCF", 
+      param=list(normalize = "center",method="Cosine"))
+
+# Z-score normalization
+UB_Z_C <- Recommender(getData(e, "train"), "UBCF", 
+      param=list(normalize = "Z-score",method="Cosine"))
+```
+
+```{r}
+# compute predicted ratings
+p1_UB_NC <- predict(UB_N_C, getData(e, "known"), type="ratings")
+p2_UB_CC <- predict(UB_C_C, getData(e, "known"), type="ratings")
+p3_UB_ZC <- predict(UB_Z_C, getData(e, "known"), type="ratings")
+
+```
+
+```{r}
+# set all predictions that fall outside the valid range to the boundary values
+p1_UB_NC@data@x[p1_UB_NC@data@x[] < -10] <- -10
+p1_UB_NC@data@x[p1_UB_NC@data@x[] > 10] <- 10
+
+p2_UB_CC@data@x[p2_UB_CC@data@x[] < -10] <- -10
+p2_UB_CC@data@x[p2_UB_CC@data@x[] > 10] <- 10
+
+p3_UB_ZC@data@x[p3_UB_ZC@data@x[] < -10] <- -10
+p3_UB_ZC@data@x[p3_UB_ZC@data@x[] > 10] <- 10
+
+```
+
+```{r}
+# aggregate the performance statistics
+error_UBC <- rbind(
+  UB_N_C = calcPredictionAccuracy(p1_UB_NC, getData(e, "unknown")),
+  UB_C_C = calcPredictionAccuracy(p2_UB_CC, getData(e, "unknown")),
+  UB_Z_C = calcPredictionAccuracy(p3_UB_ZC, getData(e, "unknown"))
+)
+error_UBC
+```
+####The table above shows the root mean square error (RMSE), mean squared error (MSE), and mean absolute error (MAE) for each of the three UBCF models we constructed using cosine similarity with varying approaches to data normalization. As we can see, centering-based normalization outperformed Z-score normalization, and both of those normalization approaches outperformed a model constructed using non-normalized data.
+
+####A boxplot of the centering-based normalization model's predicted values demonstrates that their distribution is nearly normal:
+```{r}
+boxplot(as.vector(as(p2_UB_CC, "matrix")), col = "yellow", main = "Distribution of Predicted Values for UBCF center normalization/Cosine Model", ylab = "Ratings")
+```
+
+###Euclidean Distance
+```{r}
+# non-normalized
+UB_N_E <- Recommender(getData(e, "train"), "UBCF", 
+      param=list(normalize = NULL, method="Euclidean"))
+
+# centered
+UB_C_E <- Recommender(getData(e, "train"), "UBCF", 
+      param=list(normalize = "center",method="Euclidean"))
+
+# Z-score normalization
+UB_Z_E <- Recommender(getData(e, "train"), "UBCF", 
+      param=list(normalize = "Z-score",method="Euclidean"))
+```
+```{r}
+# compute predicted ratings
+p1_UB_NE <- predict(UB_N_E, getData(e, "known"), type="ratings")
+
+p2_UB_CE <- predict(UB_C_E, getData(e, "known"), type="ratings")
+
+p3_UB_ZE <- predict(UB_Z_E, getData(e, "known"), type="ratings")
+```
+
+```{r}
+# set all predictions that fall outside the valid range to the boundary values
+p1_UB_NE@data@x[p1_UB_NE@data@x[] < -10] <- -10
+p1_UB_NE@data@x[p1_UB_NE@data@x[] > 10] <- 10
+
+p2_UB_CE@data@x[p2_UB_CE@data@x[] < -10] <- -10
+p2_UB_CE@data@x[p2_UB_CE@data@x[] > 10] <- 10
+
+p3_UB_ZE@data@x[p3_UB_ZE@data@x[] < -10] <- -10
+p3_UB_ZE@data@x[p3_UB_ZE@data@x[] > 10] <- 10
+```
+
+```{r}
+# aggregate the performance statistics
+error_UBE <- rbind(
+  UB_N_E = calcPredictionAccuracy(p1_UB_NE, getData(e, "unknown")),
+  UB_C_E = calcPredictionAccuracy(p2_UB_CE, getData(e, "unknown")),
+  UB_Z_E = calcPredictionAccuracy(p3_UB_ZE, getData(e, "unknown"))
+)
+error_UBE
+```
+####As shown above, center-based normalization once again outperformed Z-score normalization, and both of those normalization approaches outperformed a model constructed using non-normalized data. Furthermore, these models appear to outperform their cosine similarity-based counterparts, thereby indicating that Euclidean Distance should be preferred over cosine similarity when developing a user-based collaborative filtering recommender for our data set.
+
+####A boxplot of the centering-based normalization model's predicted values demonstrates that their distribution is nearly normal:
+```{r}
+boxplot(as.vector(as(p2_UB_CE, "matrix")), col = "yellow", main = "Distribution of Predicted Values for UBCF Center based/Euclidean Model", ylab = "Ratings")
+```
+
+###Pearson Correlation
+```{r}
+# non-normalized
+UB_N_P <- Recommender(getData(e, "train"), "UBCF", 
+      param=list(normalize = NULL, method="pearson"))
+
+# centered
+UB_C_P <- Recommender(getData(e, "train"), "UBCF", 
+      param=list(normalize = "center",method="pearson"))
+
+# Z-score normalization
+UB_Z_P <- Recommender(getData(e, "train"), "UBCF", 
+      param=list(normalize = "Z-score",method="pearson"))
+```
+
+```{r}
+p1_UB_NP <- predict(UB_N_P, getData(e, "known"), type="ratings")
+
+p2_UB_CP <- predict(UB_C_P, getData(e, "known"), type="ratings")
+
+p3_UB_ZP<- predict(UB_Z_P, getData(e, "known"), type="ratings")
+```
+
+```{r}
+p1_UB_NP@data@x[p1_UB_NP@data@x[] < -10] <- -10
+p1_UB_NP@data@x[p1_UB_NP@data@x[] > 10] <- 10
+
+p2_UB_CP@data@x[p2_UB_CP@data@x[] < -10] <- -10
+p2_UB_CP@data@x[p2_UB_CP@data@x[] > 10] <- 10
+
+p3_UB_ZP@data@x[p3_UB_ZP@data@x[] < -10] <- -10
+p3_UB_ZP@data@x[p3_UB_ZP@data@x[] > 10] <- 10
+```
+
+```{r}
+# aggregate the performance statistics
+error_UBP <- rbind(
+  UB_N_P = calcPredictionAccuracy(p1_UB_NP, getData(e, "unknown")),
+  UB_C_P = calcPredictionAccuracy(p2_UB_CP, getData(e, "unknown")),
+  UB_Z_P = calcPredictionAccuracy(p3_UB_ZP, getData(e, "unknown"))
+)
+error_UBP
+```
+####As shown above, center-based normalization once again outperformed Z-score normalization, and both of those normalization approaches outperformed a model constructed using non-normalized data. Furthermore, these models appear to outperform their cosine similarity-based counterparts, thereby indicating that Pearson Distance should be preferred over cosine similarity when developing a user-based collaborative filtering recommender for our data set.
+
+####A boxplot and histogram of the centering-based normalization model's predicted values demonstrates that their distribution is nearly normal:
+```{r}
+boxplot(as.vector(as(p2_UB_CP, "matrix")), col = "yellow", main = "Distribution of Predicted Values for UBCF Center based/Pearson Model", ylab = "Ratings")
+```
+
+###Item based :Cosine
+```{r}
+# non-normalized
+IB_N_C <- Recommender(getData(e, "train"), "IBCF", 
+      param=list(normalize = NULL, method="Cosine"))
+
+# centered
+IB_C_C <- Recommender(getData(e, "train"), "IBCF", 
+      param=list(normalize = "center",method="Cosine"))
+
+# Z-score normalization
+IB_Z_C <- Recommender(getData(e, "train"), "IBCF", 
+      param=list(normalize = "Z-score",method="Cosine"))
+```
+
+```{r}
+p1_IB_NC <- predict(IB_N_C, getData(e, "known"), type="ratings")
+
+p2_IB_CC <- predict(IB_C_C, getData(e, "known"), type="ratings")
+
+p3_IB_ZC <- predict(IB_Z_C, getData(e, "known"), type="ratings")
+```
+
+```{r}
+p1_IB_NC@data@x[p1_IB_NC@data@x[] < -10] <- -10
+p1_IB_NC@data@x[p1_IB_NC@data@x[] > 10] <- 10
+
+p2_IB_CC@data@x[p2_IB_CC@data@x[] < -10] <- -10
+p2_IB_CC@data@x[p2_IB_CC@data@x[] > 10] <- 10
+
+p3_IB_ZC@data@x[p3_IB_ZC@data@x[] < -10] <- -10
+p3_IB_ZC@data@x[p3_IB_ZC@data@x[] > 10] <- 10
+```
+
+```{r}
+error_IBC <- rbind(
+  IB_N_C = calcPredictionAccuracy(p1_IB_NC, getData(e, "unknown")),
+  IB_C_C = calcPredictionAccuracy(p2_IB_CC, getData(e, "unknown")),
+  IB_Z_C = calcPredictionAccuracy(p3_IB_ZC, getData(e, "unknown"))
+)
+error_IBC
+```
+####As we can see, neither Z-score normalization nor centering of the data improved upon the accuracy obtained when simply using the raw non-normalized data.
+
+####A boxplot of the predictions obtained from the non-normalized model shows a near-normal distribution:
+```{r}
+boxplot(as.vector(as(p1_IB_NC, "matrix")), col = "yellow", main = "Distribution of Predicted Values for IBCF Raw/Cosine Model", ylab = "Ratings")
+```
+
+```{r}
+# non-normalized
+IB_N_E <- Recommender(getData(e, "train"), "IBCF", 
+      param=list(normalize = NULL, method="Euclidean"))
+
+# centered
+IB_C_E <- Recommender(getData(e, "train"), "IBCF", 
+      param=list(normalize = "center",method="Euclidean"))
+
+# Z-score normalization
+IB_Z_E <- Recommender(getData(e, "train"), "IBCF", 
+      param=list(normalize = "Z-score",method="Euclidean"))
+```
+
+```{r}
+p1_IB_NE <- predict(IB_N_E, getData(e, "known"), type="ratings")
+
+p2_IB_CE <- predict(IB_C_E, getData(e, "known"), type="ratings")
+
+p3_IB_ZE <- predict(IB_Z_E, getData(e, "known"), type="ratings")
+```
+```{r}
+p1_IB_NE@data@x[p1_IB_NE@data@x[] < -10] <- -10
+p1_IB_NE@data@x[p1_IB_NE@data@x[] > 10] <- 10
+
+p2_IB_CE@data@x[p2_IB_CE@data@x[] < -10] <- -10
+p2_IB_CE@data@x[p2_IB_CE@data@x[] > 10] <- 10
+
+p3_IB_ZE@data@x[p3_IB_ZE@data@x[] < -10] <- -10
+p3_IB_ZE@data@x[p3_IB_ZE@data@x[] > 10] <- 10
+```
+
+```{r}
+error_IBE <- rbind(
+  IB_N_E = calcPredictionAccuracy(p1_IB_NE, getData(e, "unknown")),
+  IB_C_E = calcPredictionAccuracy(p2_IB_CE, getData(e, "unknown")),
+  IB_Z_E = calcPredictionAccuracy(p3_IB_ZE, getData(e, "unknown"))
+)
+error_IBE
+```
+####As we can see, neither Z-score normalization nor centering of the data improved upon the accuracy obtained when simply using the raw non-normalized data.
+
+####A boxplot of the predictions obtained from the non-normalized model shows a near-normal distribution:
+```{r}
+boxplot(as.vector(as(p1_IB_NE, "matrix")), col = "yellow", main = "Distribution of Predicted Values for IBCF Raw/Euclidean Model", ylab = "Ratings")
+```
+```{r}
+# non-normalized
+IB_N_P <- Recommender(getData(e, "train"), "IBCF", 
+      param=list(normalize = NULL, method="pearson"))
+
+# centered
+IB_C_P <- Recommender(getData(e, "train"), "IBCF", 
+      param=list(normalize = "center",method="pearson"))
+
+# Z-score normalization
+IB_Z_P <- Recommender(getData(e, "train"), "IBCF", 
+      param=list(normalize = "Z-score",method="pearson"))
+```
+
+```{r}
+p1_IB_NP <- predict(IB_N_P, getData(e, "known"), type="ratings")
+
+p2_IB_CP <- predict(IB_C_P, getData(e, "known"), type="ratings")
+
+p3_IB_ZP <- predict(IB_Z_P, getData(e, "known"), type="ratings")
+```
+
+```{r}
+p1_IB_NP@data@x[p1_IB_NP@data@x[] < -10] <- -10
+p1_IB_NP@data@x[p1_IB_NP@data@x[] > 10] <- 10
+p2_IB_CP@data@x[p2_IB_CP@data@x[] < -10] <- -10
+p2_IB_CP@data@x[p2_IB_CP@data@x[] > 10] <- 10
+
+p3_IB_ZP@data@x[p3_IB_ZP@data@x[] < -10] <- -10
+p3_IB_ZP@data@x[p3_IB_ZP@data@x[] > 10] <- 10
+```
+
+```{r}
+error_IBP <- rbind(
+  IB_N_P = calcPredictionAccuracy(p1_IB_NP, getData(e, "unknown")),
+  IB_C_P = calcPredictionAccuracy(p2_IB_CP, getData(e, "unknown")),
+  IB_Z_P = calcPredictionAccuracy(p3_IB_ZP, getData(e, "unknown"))
+)
+error_IBP
+```
+####As we can see, neither Z-score normalization nor centering of the data improved upon the accuracy obtained when simply using the raw non-normalized data.
+
+####A boxplot of the predictions obtained from the non-normalized model shows a near-normal distribution:
+```{r}
+boxplot(as.vector(as(p1_IB_NP, "matrix")), col = "yellow", main = "Distribution of Predicted Values for IBCF Raw/Pearson Model", ylab = "Ratings")
+```
+```{r}
+compare_results <- data.frame(rbind(error_UBC, error_UBP, error_UBE, error_IBC, error_IBP, error_IBE))
+compare_results<-compare_results[order(compare_results$RMSE),]
+compare_results
+```
+###Extract prediction for one user using the best model
+```{r}
+eval_recommender <- Recommender(data=getData(e, "train"), method = "UBCF", parameter = list(normalize="center", method="Pearson"))
+
+mypredict <- predict(object = eval_recommender, newdata = getData(e, "known"), type = "topNList", n=1)
+recc_user_1 <- mypredict@items[[1]]
+user1_topjoke <- mypredict@itemLabels[recc_user_1]
+recjokeRating <- mypredict@ratings[[1]]
+```
+###What was their other highest rated joke? 
+```{r}
+test <- normalize(getData(e, "known"), method="center")
+test <- as(test, 'matrix')
+names(which.max(test[1,] ))
+max(test[1,], na.rm=T)
+```
+
+
